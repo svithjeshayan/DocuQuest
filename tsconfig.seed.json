@@ -1,0 +1,14 @@
+{
+    "compilerOptions": {
+      "target": "ESNext",
+      "module": "CommonJS", // Use CommonJS for ts-node
+      "strict": true,
+      "esModuleInterop": true,
+      "skipLibCheck": true,
+      "forceConsistentCasingInFileNames": true,
+      "outDir": "./dist",
+      "rootDir": "./"
+    },
+    "include": ["prisma/**/*.ts"],
+    "exclude": ["node_modules"]
+  }
