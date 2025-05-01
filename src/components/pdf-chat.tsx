@@ -8,8 +8,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Send, MessageSquare, Loader2, Edit2 } from "lucide-react";
 import parse, { domToReact, Element } from "html-react-parser";
-import sanitizeHtml from "sanitize-html"; 
-import "@/components/css/global.css"; 
+import sanitizeHtml from "sanitize-html";
+import Tesseract from "tesseract.js"; // Import Tesseract.js (if using npm)
+import "@/components/css/global.css";
 
 // Initialize OpenAI with the provided API key
 // WARNING: Hardcoding API keys in client-side code is insecure. For production, move to server-side API routes.
@@ -81,27 +82,24 @@ export default function PdfChat({
   }, [assistantId]);
 
   const typewriterEffect = (messageId: string, content: string) => {
-    const words = content.split(' ');  // Split the content into words
+    const words = content.split(" "); // Split the content into words
     let index = 0;
 
     const intervalId = setInterval(() => {
-        setTypewriterMessages((prev) => {
-            const newContent = prev.get(messageId) || "";
-            if (index < words.length) {
-                // Add a new word with the fade-in class
-                const wordWithFadeIn = `<span class="fade-word">${words[index]}</span>`;
-                return new Map(prev).set(messageId, newContent + (newContent ? ' ' : '') + wordWithFadeIn);
-            } else {
-                clearInterval(intervalId);
-                return prev;
-            }
-        });
-        index += 1;
-    }, 50); // Adjust the speed here (50ms between each word)
-};
-
-
-
+      setTypewriterMessages((prev) => {
+        const newContent = prev.get(messageId) || "";
+        if (index < words.length) {
+          // Add a new word with the fade-in class
+          const wordWithFadeIn = `<span class="fade-word">${words[index]}</span>`;
+          return new Map(prev).set(messageId, newContent + (newContent ? " " : "") + wordWithFadeIn);
+        } else {
+          clearInterval(intervalId);
+          return prev;
+        }
+      });
+      index += 1;
+    }, 75); // Adjust the speed here (50ms between each word)
+  };
 
   // Sync local messages with parent messages
   useEffect(() => {
@@ -177,8 +175,8 @@ export default function PdfChat({
   };
 
   const toggleAssistant = async () => {
-    const newAssistantId = assistantId === "asst_jWYrduIi2q9am5ho6TJxric0" 
-      ? "asst_esfTILv1Q0BeKYWQIPLJf92p" 
+    const newAssistantId = assistantId === "asst_jWYrduIi2q9am5ho6TJxric0"
+      ? "asst_esfTILv1Q0BeKYWQIPLJf92p"
       : "asst_jWYrduIi2q9am5ho6TJxric0";
     setAssistantId(newAssistantId);
     setIsLoading(true); // Show spinner in send button
@@ -310,12 +308,27 @@ export default function PdfChat({
     });
   };
 
-  const processImageFile = async (file: File): Promise<string> => {
+  const processImageFile = async (file: File): Promise<{ text: string; dataUrl: string }> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
-      reader.onload = () => {
+      reader.onload = async () => {
         if (typeof reader.result === "string") {
-          resolve(reader.result);
+          try {
+            // Perform OCR using Tesseract.js
+            const { data: { text } } = await Tesseract.recognize(
+              reader.result,
+              "eng", // Language: English
+              {
+                logger: (m) => console.log(m), // Optional: Log progress
+              }
+            );
+            if (!text.trim()) {
+              throw new Error("No text could be extracted from the image");
+            }
+            resolve({ text, dataUrl: reader.result });
+          } catch (error) {
+            reject("Failed to extract text from image");
+          }
         } else {
           reject("Failed to process image");
         }
@@ -352,20 +365,20 @@ export default function PdfChat({
           content: `I've uploaded a PDF named "${file.name}". Here's the content: ${extractedText.substring(0, 1000)}...`,
         });
       } else if (file.type.startsWith("image/")) {
-        const imageData = await processImageFile(file);
+        const { text, dataUrl } = await processImageFile(file);
         fileData = {
           id: Date.now().toString(),
           name: file.name,
           type: "image",
-          content: "Image uploaded",
-          url: imageData,
+          content: text, // Store extracted text
+          url: dataUrl, // Store Data URL for display if needed
           selected: true,
           chatId: chatId,
         };
         onFileUpload(fileData);
         await openai.beta.threads.messages.create(currentThreadId, {
           role: "user",
-          content: `I've uploaded an image named "${file.name}". Please analyze it.`,
+          content: `I've uploaded an image named "${file.name}". Here's the extracted text: ${text.substring(0, 1000)}...`,
         });
       } else {
         throw new Error("Unsupported file type");
@@ -509,7 +522,7 @@ export default function PdfChat({
 
   const renderMessageContent = (content: string) => {
     const sanitizedContent = sanitizeHtml(content, {
-      allowedTags: ["div", "h1", "h2", "h3", "h4", "h5", "h6", "p", "ul", "ol", "li", "b", "i", "strong", "em", "br"],
+      allowedTags: ["div", "h1", "h2", "h3", "h4", "h5", "h6", "p", "ul", "ol", "li", "b", "i", "strong", "em", "br", "span"],
       allowedAttributes: {
         "*": ["class", "style"],
       },
@@ -539,6 +552,12 @@ export default function PdfChat({
         onLoad={() => {
           (window as any).pdfjsLib.GlobalWorkerOptions.workerSrc =
             "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+        }}
+      />
+      <Script
+        src="https://unpkg.com/tesseract.js@5.1.0/dist/tesseract.min.js"
+        onLoad={() => {
+          console.log("Tesseract.js loaded");
         }}
       />
       <div className="h-full flex flex-col">
