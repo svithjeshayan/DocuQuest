@@ -12,10 +12,18 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
   try {
     const { selected } = await request.json();
     const file = await prisma.uploadedFile.update({
-      where: { id: params.id, chat: { userId } },
+      where: { id: params.id },
       data: { selected },
+      select: {
+        id: true,
+        name: true,
+        type: true,
+        content: true,
+        url: true,
+        selected: true,
+        chatId: true, // Include chatId
+      },
     });
-
     return NextResponse.json(file);
   } catch (error) {
     console.error("Error updating file:", error);
@@ -31,17 +39,11 @@ export async function DELETE(request: NextRequest, { params }: { params: { id: s
 
   try {
     await prisma.uploadedFile.delete({
-      where: { id: params.id, chat: { userId } },
+      where: { id: params.id },
     });
-
     return NextResponse.json({ message: "File deleted successfully" });
   } catch (error) {
     console.error("Error deleting file:", error);
     return NextResponse.json({ error: "Failed to delete file" }, { status: 500 });
   }
 }
-
-// Ensure Prisma client is properly disconnected
-process.on('SIGTERM', async () => {
-  await prisma.$disconnect();
-});

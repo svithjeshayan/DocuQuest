@@ -8,7 +8,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Send, MessageSquare, Loader2, Edit2 } from "lucide-react";
 import parse, { domToReact, Element } from "html-react-parser";
-import sanitizeHtml from "sanitize-html";
+import sanitizeHtml from "sanitize-html"; 
+import "@/components/css/global.css"; 
 
 // Initialize OpenAI with the provided API key
 // WARNING: Hardcoding API keys in client-side code is insecure. For production, move to server-side API routes.
@@ -30,7 +31,8 @@ type FileData = {
   type: string;
   content: string;
   url?: string;
-  selected?: boolean;
+  selected: boolean;
+  chatId: string;
 };
 
 interface PdfChatProps {
@@ -65,26 +67,41 @@ export default function PdfChat({
   const [newChatName, setNewChatName] = useState("");
   const [typewriterMessages, setTypewriterMessages] = useState<Map<string, string>>(new Map());
   const [assistantId, setAssistantId] = useState<string>("asst_jWYrduIi2q9am5ho6TJxric0"); // Default to general chat
+  const [chatType, setChatType] = useState<string>("general");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
 
+  useEffect(() => {
+    if (assistantId === "asst_jWYrduIi2q9am5ho6TJxric0") {
+      setChatType("general");
+    } else if (assistantId === "asst_esfTILv1Q0BeKYWQIPLJf92p") {
+      setChatType("qa");
+    }
+  }, [assistantId]);
+
   const typewriterEffect = (messageId: string, content: string) => {
+    const words = content.split(' ');  // Split the content into words
     let index = 0;
+
     const intervalId = setInterval(() => {
-      setTypewriterMessages((prev) => {
-        const newContent = prev.get(messageId) || "";
-        if (index < content.length) {
-          return new Map(prev).set(messageId, newContent + content[index]);
-        } else {
-          clearInterval(intervalId);
-          return prev;
-        }
-      });
-      index += 1;
-    }, 50); // Adjust the speed of typing here (in milliseconds)
-  };
-  
+        setTypewriterMessages((prev) => {
+            const newContent = prev.get(messageId) || "";
+            if (index < words.length) {
+                // Add a new word with the fade-in class
+                const wordWithFadeIn = `<span class="fade-word">${words[index]}</span>`;
+                return new Map(prev).set(messageId, newContent + (newContent ? ' ' : '') + wordWithFadeIn);
+            } else {
+                clearInterval(intervalId);
+                return prev;
+            }
+        });
+        index += 1;
+    }, 50); // Adjust the speed here (50ms between each word)
+};
+
+
+
 
   // Sync local messages with parent messages
   useEffect(() => {
@@ -159,13 +176,100 @@ export default function PdfChat({
     return threadId;
   };
 
-  const toggleAssistant = () => {
+  const toggleAssistant = async () => {
     const newAssistantId = assistantId === "asst_jWYrduIi2q9am5ho6TJxric0" 
       ? "asst_esfTILv1Q0BeKYWQIPLJf92p" 
       : "asst_jWYrduIi2q9am5ho6TJxric0";
     setAssistantId(newAssistantId);
-    setThreadId(null); // Reset thread ID when assistant changes
-    saveThreadId(null); // Save null threadId to database
+    setIsLoading(true); // Show spinner in send button
+    setError(null);
+
+    try {
+      const currentThreadId = await createThreadIfNeeded(); // Reuse or create thread
+
+      const defaultMessageContent = newAssistantId === "asst_jWYrduIi2q9am5ho6TJxric0"
+        ? "Welcome to General Chat! How can I assist you today?"
+        : "Start asking questions about the uploaded documents.";
+
+      if (newAssistantId === "asst_jWYrduIi2q9am5ho6TJxric0") {
+        // General Assistant: Add default message directly
+        const defaultMessage: Message = {
+          id: Date.now().toString(),
+          content: defaultMessageContent,
+          isUser: false,
+          timestamp: new Date(),
+        };
+
+        setLocalMessages([defaultMessage]);
+        onMessageAdd(defaultMessage);
+
+        // Add to OpenAI thread for consistency
+        await openai.beta.threads.messages.create(currentThreadId, {
+          role: "assistant",
+          content: defaultMessageContent,
+        });
+      } else {
+        // Q&A Assistant: Send user message with selected file content and run assistant
+        let messageContent = defaultMessageContent;
+        if (selectedFiles.length > 0) {
+          messageContent += "\n\nReference the following content:\n\n";
+          selectedFiles.forEach((file) => {
+            messageContent += `--- ${file.name} ---\n${file.content.substring(0, 5000)}\n\n`;
+          });
+        } else {
+          messageContent += "\n\nNo documents are currently selected.";
+        }
+
+        await openai.beta.threads.messages.create(currentThreadId, {
+          role: "user",
+          content: messageContent,
+        });
+
+        // Create a run to prompt the assistant to respond
+        const run = await openai.beta.threads.runs.create(currentThreadId, {
+          assistant_id: newAssistantId,
+        });
+
+        // Wait for the run to complete
+        let runStatus = await openai.beta.threads.runs.retrieve(currentThreadId, run.id);
+        while (runStatus.status !== "completed") {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          runStatus = await openai.beta.threads.runs.retrieve(currentThreadId, run.id);
+        }
+
+        // Fetch the assistant's response
+        const threadMessages = await openai.beta.threads.messages.list(currentThreadId);
+        const assistantMessage = threadMessages.data.find((msg) => msg.role === "assistant");
+
+        if (assistantMessage && assistantMessage.content[0].type === "text") {
+          const aiResponse: Message = {
+            id: (Date.now() + 1).toString(),
+            content: assistantMessage.content[0].text.value,
+            isUser: false,
+            timestamp: new Date(),
+          };
+          typewriterEffect(aiResponse.id, aiResponse.content);
+          setLocalMessages([aiResponse]);
+          onMessageAdd(aiResponse);
+        } else {
+          // Fallback: Show the default user message
+          const fallbackMessage: Message = {
+            id: Date.now().toString(),
+            content: defaultMessageContent,
+            isUser: true,
+            timestamp: new Date(),
+          };
+          setLocalMessages([fallbackMessage]);
+          onMessageAdd(fallbackMessage);
+          setError("No response from Q&A Assistant. You can start asking questions.");
+        }
+      }
+    } catch (error) {
+      console.error("Error sending default message:", error);
+      setError("Failed to initialize new chat. Please try again.");
+    } finally {
+      setIsLoading(false); // Hide spinner
+    }
   };
 
   const extractTextFromPdf = async (file: File): Promise<string> => {
@@ -230,7 +334,7 @@ export default function PdfChat({
 
     try {
       let fileData: FileData;
-      const newThreadId = await createThreadIfNeeded();
+      const currentThreadId = await createThreadIfNeeded();
 
       if (file.type === "application/pdf") {
         const extractedText = await extractTextFromPdf(file);
@@ -239,9 +343,11 @@ export default function PdfChat({
           name: file.name,
           type: "pdf",
           content: extractedText,
+          selected: true,
+          chatId: chatId,
         };
         onFileUpload(fileData);
-        await openai.beta.threads.messages.create(newThreadId, {
+        await openai.beta.threads.messages.create(currentThreadId, {
           role: "user",
           content: `I've uploaded a PDF named "${file.name}". Here's the content: ${extractedText.substring(0, 1000)}...`,
         });
@@ -253,9 +359,11 @@ export default function PdfChat({
           type: "image",
           content: "Image uploaded",
           url: imageData,
+          selected: true,
+          chatId: chatId,
         };
         onFileUpload(fileData);
-        await openai.beta.threads.messages.create(newThreadId, {
+        await openai.beta.threads.messages.create(currentThreadId, {
           role: "user",
           content: `I've uploaded an image named "${file.name}". Please analyze it.`,
         });
@@ -263,45 +371,43 @@ export default function PdfChat({
         throw new Error("Unsupported file type");
       }
 
-      
-
       if (localMessages.length === 0) {
-        onRename( file.name.substring(0, 20)+'...');
+        onRename(file.name.substring(0, 20) + "...");
       }
 
-      await openai.beta.threads.messages.create(newThreadId, {
+      await openai.beta.threads.messages.create(currentThreadId, {
         role: "user",
-        content: `${assistantId === "asst_jWYrduIi2q9am5ho6TJxric0" ? "concise summary in 2 sentence, format in html, " : "Start"}\n\nReference the following content:\n\n--- ${fileData.name} ---\n${fileData.content.substring(0, 5000)}\n\n`,
+        content: `${
+          chatType === "general" ? "concise summary in 2 sentence, format in html, " : "Start Ask Question"
+        }\n\nReference the following content:\n\n--- ${fileData.name} ---\n${fileData.content.substring(0, 5000)}\n\n`,
       });
 
-      const run = await openai.beta.threads.runs.create(newThreadId, {
+      const run = await openai.beta.threads.runs.create(currentThreadId, {
         assistant_id: assistantId,
       });
 
-      let runStatus = await openai.beta.threads.runs.retrieve(newThreadId, run.id);
+      let runStatus = await openai.beta.threads.runs.retrieve(currentThreadId, run.id);
       while (runStatus.status !== "completed") {
         await new Promise((resolve) => setTimeout(resolve, 1000));
-        runStatus = await openai.beta.threads.runs.retrieve(newThreadId, run.id);
+        runStatus = await openai.beta.threads.runs.retrieve(currentThreadId, run.id);
       }
 
-      const threadMessages = await openai.beta.threads.messages.list(newThreadId);
+      const threadMessages = await openai.beta.threads.messages.list(currentThreadId);
       const assistantMessage = threadMessages.data.find((msg) => msg.role === "assistant");
 
       if (assistantMessage && assistantMessage.content[0].type === "text") {
         let aiResponseContent = assistantMessage.content[0].text.value
           .replace(/`/g, "")
           .replace(/html/gi, "");
-      
+
         const aiResponse: Message = {
           id: (Date.now() + 1).toString(),
           content: aiResponseContent,
           isUser: false,
           timestamp: new Date(),
         };
-        
-        // Trigger typewriter animation for the assistant message
+
         typewriterEffect(aiResponse.id, aiResponseContent);
-      
         setLocalMessages((prev) => [...prev, aiResponse]);
         onMessageAdd(aiResponse);
       } else {
@@ -333,7 +439,7 @@ export default function PdfChat({
     setError(null);
 
     try {
-      const newThreadId = await createThreadIfNeeded();
+      const currentThreadId = await createThreadIfNeeded();
 
       let messageContent = inputMessage;
       if (selectedFiles.length > 0) {
@@ -345,22 +451,22 @@ export default function PdfChat({
         messageContent += "\n\nNo documents are selected. Please provide an answer based on general knowledge or indicate if specific information is required.";
       }
 
-      await openai.beta.threads.messages.create(newThreadId, {
+      await openai.beta.threads.messages.create(currentThreadId, {
         role: "user",
         content: messageContent,
       });
 
-      const run = await openai.beta.threads.runs.create(newThreadId, {
+      const run = await openai.beta.threads.runs.create(currentThreadId, {
         assistant_id: assistantId,
       });
 
-      let runStatus = await openai.beta.threads.runs.retrieve(newThreadId, run.id);
+      let runStatus = await openai.beta.threads.runs.retrieve(currentThreadId, run.id);
       while (runStatus.status !== "completed") {
         await new Promise((resolve) => setTimeout(resolve, 1000));
-        runStatus = await openai.beta.threads.runs.retrieve(newThreadId, run.id);
+        runStatus = await openai.beta.threads.runs.retrieve(currentThreadId, run.id);
       }
 
-      const threadMessages = await openai.beta.threads.messages.list(newThreadId);
+      const threadMessages = await openai.beta.threads.messages.list(currentThreadId);
       const assistantMessage = threadMessages.data.find((msg) => msg.role === "assistant");
 
       if (assistantMessage && assistantMessage.content[0].type === "text") {
@@ -370,6 +476,7 @@ export default function PdfChat({
           isUser: false,
           timestamp: new Date(),
         };
+        typewriterEffect(aiResponse.id, aiResponse.content);
         setLocalMessages((prev) => [...prev, aiResponse]);
         onMessageAdd(aiResponse);
       } else {
@@ -408,7 +515,6 @@ export default function PdfChat({
       },
     });
 
-    
     return parse(sanitizedContent, {
       replace: (domNode) => {
         if (domNode instanceof Element && domNode.name === "p") {
@@ -477,6 +583,7 @@ export default function PdfChat({
               variant="outline"
               size="sm"
               onClick={toggleAssistant}
+              disabled={isLoading}
             >
               {assistantId === "asst_jWYrduIi2q9am5ho6TJxric0" ? "Switch to Q&A Chat" : "Switch to General Chat"}
             </Button>
@@ -504,11 +611,11 @@ export default function PdfChat({
               <div key={message.id} className={`flex ${message.isUser ? "justify-end" : "justify-start"}`}>
                 <div
                   className={`max-w-[80%] p-3 rounded-lg ${
-                    message.isUser ? "bg-black text-white" : "bg-gray-100 text-gray-800"
+                    message.isUser ? "bg-black text-white" : "bg-white text-gray-800"
                   }`}
                 >
-                  <div className="mb-1">
-                    {message.isUser ? message.content : renderMessageContent(message.content)}
+                  <div className={`mb-1`}>
+                    {message.isUser ? message.content : renderMessageContent(typewriterMessages.get(message.id) || message.content)}
                   </div>
                   <div className={`text-xs ${message.isUser ? "text-blue-200" : "text-gray-500"} text-right`}>
                     {formatTime(message.timestamp)}
@@ -517,7 +624,6 @@ export default function PdfChat({
               </div>
             ))
           )}
-          
           <div ref={messagesEndRef} />
         </div>
         {error && <div className="p-3 mx-4 mb-2 bg-red-50 text-red-700 rounded-md text-sm">{error}</div>}
@@ -533,7 +639,11 @@ export default function PdfChat({
             disabled={isLoading}
             className="flex-1"
           />
-          <Button type="submit" disabled={isLoading || !inputMessage.trim()} className="bg-black hover:bg-gray-900 text-white">
+          <Button
+            type="submit"
+            disabled={isLoading || !inputMessage.trim()}
+            className="bg-black hover:bg-gray-900 text-white"
+          >
             {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
           </Button>
         </form>

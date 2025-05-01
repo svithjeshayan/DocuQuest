@@ -35,7 +35,6 @@ export default async function DashboardRootLayout({
       <SidebarProvider>
       {/* <AppSidebar variant="inset" /> */}
       <SidebarInset>
-        <SiteHeader />
       
           {children}
       </SidebarInset>

@@ -5,6 +5,7 @@ import PdfChat from "@/components/pdf-chat";
 import { Button } from "@/components/ui/button";
 import { PlusCircle, Trash2, X } from "lucide-react";
 import { useUser } from "@/context/UserContext";
+import { signOut } from "next-auth/react"; // Added import
 import '@/components/css/global.css';
 
 type Chat = {
@@ -52,10 +53,9 @@ export default function Home() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
   const [showFileDeleteConfirm, setShowFileDeleteConfirm] = useState<string | null>(null);
 
-  // Fetch chats and files on mount
   useEffect(() => {
     if (!user) return;
-
+  
     const fetchData = async () => {
       setIsLoading(true);
       try {
@@ -65,15 +65,16 @@ export default function Home() {
         const chatsData = await chatsResponse.json();
         setChats(chatsData);
         setIsChatLoaded(true);
-
+  
         if (chatsData.length > 0) {
           setActiveChat(chatsData[0].id);
         }
-
+  
         const filesResponse = await fetch("/api/files", {
           headers: { "User-Id": user.id },
         });
         const filesData = await filesResponse.json();
+        console.log("Fetched files:", filesData);
         setUploadedFiles(filesData);
       } catch (error) {
         console.error("Error fetching data:", error);
@@ -81,11 +82,10 @@ export default function Home() {
         setIsLoading(false);
       }
     };
-
+  
     fetchData();
   }, [user]);
 
-  // Create a new chat if none exist after chats are loaded
   useEffect(() => {
     if (chats.length === 0 && isChatLoaded) {
       createNewChat();
@@ -224,7 +224,7 @@ export default function Home() {
     url?: string;
   }) => {
     if (!user || !activeChat) return;
-
+  
     try {
       const response = await fetch("/api/files", {
         method: "POST",
@@ -234,7 +234,7 @@ export default function Home() {
         },
         body: JSON.stringify({
           chatId: activeChat,
-          name: file.name.substring(0, 20)+'...',
+          name: file.name.substring(0, 20) + "...",
           type: file.type,
           content: file.content,
           url: file.url,
@@ -271,7 +271,9 @@ export default function Home() {
   };
 
   const getSelectedFiles = () => {
-    return uploadedFiles.filter((file) => file.selected && file.chatId === activeChat);
+    const selectedFiles = uploadedFiles.filter((file) => file.selected && file.chatId === activeChat);
+    console.log("Selected files for activeChat", activeChat, selectedFiles);
+    return selectedFiles;
   };
 
   if (isLoading) {
@@ -287,7 +289,7 @@ export default function Home() {
     <div className="flex h-screen bg-gray-100">
       <div className="w-1/5 bg-white border-r border-gray-200 flex flex-col">
         <div className="p-4 border-b border-gray-200">
-          <h1 className="text-xl font-semibold text-gray-800">PDF Chat</h1>
+          <h1 className="text-xl font-semibold text-gray-800">DocQuest</h1>
         </div>
         <div className="p-4">
           <Button
@@ -316,6 +318,15 @@ export default function Home() {
               </button>
             </div>
           ))}
+        </div>
+        <div className="p-4 border-t border-gray-200">
+          <Button
+            variant="outline"
+            className="w-full"
+            onClick={() => signOut({ callbackUrl: "/login" })}
+          >
+            Logout
+          </Button>
         </div>
         {showDeleteConfirm && (
           <div className="fixed top-1/4 left-1/2 transform -translate-x-1/2 bg-white p-6 rounded-lg shadow-lg z-50">
@@ -454,11 +465,11 @@ export default function Home() {
                 >
                   Delete
                 </Button>
-              </div>
             </div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
+    </div>
     </div>
   );
 }
