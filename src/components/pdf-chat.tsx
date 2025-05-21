@@ -616,68 +616,32 @@ export default function PdfChat({
   };
 
   const renderMessageContent = (content: string, messageId: string) => {
-    try {
-      const parsed = JSON.parse(content);
-      if (parsed.question && parsed.options) {
-        const card = questionCards.find((c) => c.id === messageId);
-        if (!card) return null;
-
-        return (
-          <div className="bg-white p-4 rounded-lg shadow-md w-full max-w-md">
-            <h3 className="text-lg font-semibold mb-4">{parsed.question.text}</h3>
-            <div className="space-y-2">
-              {parsed.options.map((option: Option) => (
-                <div
-                  key={option.id}
-                  onClick={() => handleOptionClick(card.id, option.id)}
-                  className={`p-3 rounded-md cursor-pointer transition-colors duration-200 ${
-                    card.selectedOption === option.id
-                      ? option.isCorrect
-                        ? "bg-green-100 border-2 border-green-500"
-                        : "bg-red-100 border-2 border-red-500"
-                      : "bg-gray-50 hover:bg-gray-100 border"
-                  }`}
-                >
-                  <pre className="text-sm bg-gray-900 text-white p-2 rounded-md">
-                    <code>{option.text}</code>
-                  </pre>
-                </div>
-              ))}
-            </div>
-            {card.answerStatus && (
-              <p className={`mt-4 font-medium ${card.answerStatus.startsWith("Correct") ? "text-green-600" : "text-red-600"}`}>
-                {card.answerStatus}
-              </p>
-            )}
+  try {
+    const parsed = JSON.parse(content);
+    if (parsed.question && parsed.options) {
+      return (
+        <div className="bg-white p-4 rounded-lg shadow-md w-full max-w-md">
+          <h3 className="text-lg font-semibold mb-4">{parsed.question.text}</h3>
+          <div className="space-y-2">
+            {parsed.options.map((option: { id: string; text: string; isCorrect: boolean }) => (
+              <div
+                key={option.id}
+                className="p-3 rounded-md cursor-pointer transition-colors duration-200 bg-gray-50 hover:bg-gray-100 border border-gray-200"
+              >
+                <pre className="text-sm bg-gray-900 text-white p-2 rounded-md">
+                  <code>{option.text}</code>
+                </pre>
+              </div>
+            ))}
           </div>
-        );
-      }
-    } catch (e) {
-      const sanitizedContent = sanitizeHtml(content, {
-        allowedTags: ["div", "h1", "h2", "h3", "h4", "h5", "h6", "p", "ul", "ol", "li", "b", "i", "strong", "em", "br", "span", "pre", "code"],
-        allowedAttributes: {
-          "*": ["class", "style"],
-        },
-      });
-
-      return parse(sanitizedContent, {
-        replace: (domNode) => {
-          if (domNode instanceof Element && domNode.name === "p") {
-            const nextSibling = domNode.next;
-            const isLastP = !nextSibling || (nextSibling instanceof Element && nextSibling.name !== "p");
-            return (
-              <>
-                {domToReact([domNode])}
-                {!isLastP && <div style={{ height: "12px" }} />}
-              </>
-            );
-          }
-          return undefined;
-        },
-      });
+        </div>
+      );
     }
-    return content;
-  };
+    return <div className="text-gray-800">{content}</div>;
+  } catch (e) {
+    return <div className="text-gray-800">{content}</div>;
+  }
+};
 
   return (
     <>
@@ -743,7 +707,10 @@ export default function PdfChat({
             )}
           </div>
           <div className="flex items-center gap-2">
-            <div className="text-sm font-medium">Score: {score}</div>
+             { chatType === "qa" && (
+                <div className="text-sm font-medium">Score: {score}</div>
+             )}
+            
             <Button
               variant="outline"
               size="sm"
@@ -752,7 +719,8 @@ export default function PdfChat({
             >
               {assistantId === "asst_jWYrduIi2q9am5ho6TJxric0" ? "Switch to Q&A Chat" : "Switch to General Chat"}
             </Button>
-            <Button
+            { chatType === "qa" && (
+                <Button
               variant="outline"
               size="sm"
               onClick={fetchNewQuestion}
@@ -760,6 +728,9 @@ export default function PdfChat({
             >
               New Question
             </Button>
+            )}
+            
+
             <input
               id="fileUploadInput"
               type="file"

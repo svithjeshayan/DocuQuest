@@ -71,8 +71,11 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-100 to-slate-200 p-4">
-      <Card className="w-full max-w-md shadow-lg bg-white">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-100 to-slate-200 p-4" style={{ backgroundImage: "url('https://researchleap.com/wp-content/uploads/2023/03/1.jpg')"}}>
+      <div style={{ background: "rgba(0, 0, 0, 0.6)", position: "absolute", top: 0, left: 0, right: 0, bottom: 0, zIndex: 1 }}>
+        </div>
+      
+      <Card className="w-full max-w-md shadow-lg bg-white" style={{ zIndex: 2 }}>
         <CardHeader className="space-y-1">
           <CardTitle className="text-2xl font-bold text-center">Welcome back</CardTitle>
           <CardDescription className="text-center">Enter your credentials to sign in to your account</CardDescription>
@@ -133,8 +136,21 @@ export default function LoginPage() {
               {isLoading ? "Signing in..." : "Sign in"}
             </Button>
           </form>
+        <CardFooter className="text-center justify-center">
+          <p className="text-sm text-muted-foreground">
+            Don’t have an account?{" "}
+            <span
+              onClick={() => router.push("/src/app/sign up/page.tsx")}
+              className="text-blue-600 hover:underline cursor-pointer"
+            >
+              Sign up
+            </span>
+          </p>
+        </CardFooter>
+
         </CardContent>
       </Card>
     </div>
+
   );
 }
