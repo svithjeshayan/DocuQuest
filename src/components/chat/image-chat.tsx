@@ -1,3 +1,4 @@
+//src\components\chat\image-chat.tsx
 "use client"
 
 import type React from "react"

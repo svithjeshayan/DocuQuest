@@ -9,11 +9,9 @@ import { Input } from "@/components/ui/input";
 import { Send, MessageSquare, Loader2, Edit2 } from "lucide-react";
 import parse, { domToReact, Element } from "html-react-parser";
 import sanitizeHtml from "sanitize-html";
-import Tesseract from "tesseract.js"; // Import Tesseract.js (if using npm)
+import Tesseract from "tesseract.js";
 import "@/components/css/global.css";
 
-// Initialize OpenAI with the provided API key
-// WARNING: Hardcoding API keys in client-side code is insecure. For production, move to server-side API routes.
 const openai = new OpenAI({
   apiKey: process.env.NEXT_PUBLIC_OPENAI_API_KEY,
   dangerouslyAllowBrowser: true,
@@ -36,6 +34,26 @@ type FileData = {
   chatId: string;
 };
 
+type Question = {
+  id: string;
+  text: string;
+  type: string;
+};
+
+type Option = {
+  id: string;
+  text: string;
+  isCorrect: boolean;
+};
+
+type QuestionCard = {
+  id: string;
+  question: Question;
+  options: Option[];
+  selectedOption: string | null;
+  answerStatus: string | null;
+};
+
 interface PdfChatProps {
   chatId: string;
   messages: Message[];
@@ -46,6 +64,7 @@ interface PdfChatProps {
   onMessageAdd: (message: Message) => void;
   onThreadIdUpdate: (chatId: string, threadId: string | null) => void;
   selectedFiles: FileData[];
+  onFetchFiles: (chatId: string) => Promise<FileData[]>;
 }
 
 export default function PdfChat({
@@ -58,38 +77,58 @@ export default function PdfChat({
   onMessageAdd,
   onThreadIdUpdate,
   selectedFiles,
+  onFetchFiles,
 }: PdfChatProps) {
   const [inputMessage, setInputMessage] = useState("");
-  const [localMessages, setLocalMessages] = useState<Message[]>(parentMessages);
+  const [localMessages, setLocalMessages] = useState<Message[]>(() => {
+    const savedMessages = localStorage.getItem(`messages_${chatId}`);
+    return savedMessages ? JSON.parse(savedMessages) : parentMessages;
+  });
   const [threadId, setThreadId] = useState<string | null>(initialThreadId);
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ code: string; message: string } | null>(null);
   const [isRenaming, setIsRenaming] = useState(false);
   const [newChatName, setNewChatName] = useState("");
   const [typewriterMessages, setTypewriterMessages] = useState<Map<string, string>>(new Map());
-  const [assistantId, setAssistantId] = useState<string>("asst_jWYrduIi2q9am5ho6TJxric0"); // Default to general chat
+  const [assistantId, setAssistantId] = useState<string>("asst_jWYrduIi2q9am5ho6TJxric0");
   const [chatType, setChatType] = useState<string>("general");
+  const [questionCards, setQuestionCards] = useState<QuestionCard[]>(() => {
+    const savedCards = localStorage.getItem(`questionCards_${chatId}`);
+    return savedCards ? JSON.parse(savedCards) : [];
+  });
+  const [score, setScore] = useState<number>(() => {
+    const savedScore = localStorage.getItem(`score_${chatId}`);
+    return savedScore ? parseInt(savedScore, 10) : 0;
+  });
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
+
+  // Remove the file fetching useEffect to avoid redundant fetching
+  // Rely on parent component (Home) to provide selectedFiles
+  useEffect(() => {
+    localStorage.setItem(`messages_${chatId}`, JSON.stringify(localMessages));
+    localStorage.setItem(`questionCards_${chatId}`, JSON.stringify(questionCards));
+    localStorage.setItem(`score_${chatId}`, score.toString());
+  }, [localMessages, questionCards, score, chatId]);
 
   useEffect(() => {
     if (assistantId === "asst_jWYrduIi2q9am5ho6TJxric0") {
       setChatType("general");
     } else if (assistantId === "asst_esfTILv1Q0BeKYWQIPLJf92p") {
       setChatType("qa");
+      fetchNewQuestion();
     }
   }, [assistantId]);
 
   const typewriterEffect = (messageId: string, content: string) => {
-    const words = content.split(" "); // Split the content into words
+    const words = content.split(" ");
     let index = 0;
 
     const intervalId = setInterval(() => {
       setTypewriterMessages((prev) => {
         const newContent = prev.get(messageId) || "";
         if (index < words.length) {
-          // Add a new word with the fade-in class
           const wordWithFadeIn = `<span class="fade-word">${words[index]}</span>`;
           return new Map(prev).set(messageId, newContent + (newContent ? " " : "") + wordWithFadeIn);
         } else {
@@ -98,32 +137,27 @@ export default function PdfChat({
         }
       });
       index += 1;
-    }, 75); // Adjust the speed here (50ms between each word)
+    }, 75);
   };
 
-  // Sync local messages with parent messages
   useEffect(() => {
     setLocalMessages(parentMessages);
   }, [parentMessages]);
 
-  // Update threadId when initialThreadId changes (e.g., when switching chats)
   useEffect(() => {
     setThreadId(initialThreadId);
   }, [initialThreadId]);
 
-  // Scroll to bottom of messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [localMessages]);
 
-  // Focus rename input when editing
   useEffect(() => {
     if (isRenaming) {
       renameInputRef.current?.focus();
     }
   }, [isRenaming]);
 
-  // Detect changes in selectedFiles (checked/unchecked)
   const prevSelectedFilesRef = useRef<FileData[]>([]);
   useEffect(() => {
     const hasSelectionChanged = () => {
@@ -148,13 +182,14 @@ export default function PdfChat({
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
-          "User-Id": localStorage.getItem("userId") || "", // Adjust based on your user context
+          "User-Id": localStorage.getItem("userId") || "",
         },
         body: JSON.stringify({ threadId: newThreadId }),
       });
       onThreadIdUpdate(chatId, newThreadId);
     } catch (error) {
       console.error("Error saving thread ID:", error);
+      setError({ code: "SAVE_THREAD_ERROR", message: "Failed to save thread ID." });
     }
   };
 
@@ -167,11 +202,110 @@ export default function PdfChat({
         return thread.id;
       } catch (error) {
         console.error("Error creating thread:", error);
-        setError("Failed to initialize chat. Please try again.");
+        setError({ code: "CREATE_THREAD_ERROR", message: "Failed to initialize chat. Please try again." });
         throw error;
       }
     }
     return threadId;
+  };
+
+  const fetchNewQuestion = async () => {
+    setIsLoading(true);
+    setError(null);
+
+    const loadingMessage: Message = {
+      id: Date.now().toString(),
+      content: "Loading new question...",
+      isUser: false,
+      timestamp: new Date(),
+    };
+    setLocalMessages((prev) => [...prev, loadingMessage]);
+    onMessageAdd(loadingMessage);
+
+    try {
+      const currentThreadId = await createThreadIfNeeded();
+      let messageContent = "Generate a multiple-choice question based on the following content:\n\n";
+      if (selectedFiles.length > 0) {
+        selectedFiles.forEach((file) => {
+          messageContent += `--- ${file.name} ---\n${file.content.substring(0, 5000)}\n\n`;
+        });
+      } else {
+        messageContent += "No documents are selected. Generate a general knowledge question.";
+      }
+      messageContent += "Format the response as a JSON string with a 'question' object (id, text, type) and an 'options' array (id, text, isCorrect).";
+
+      await openai.beta.threads.messages.create(currentThreadId, {
+        role: "user",
+        content: messageContent,
+      });
+
+      const run = await openai.beta.threads.runs.create(currentThreadId, {
+        assistant_id: assistantId,
+      });
+
+      let runStatus = await openai.beta.threads.runs.retrieve(currentThreadId, run.id);
+      while (runStatus.status !== "completed") {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        runStatus = await openai.beta.threads.runs.retrieve(currentThreadId, run.id);
+      }
+
+      const threadMessages = await openai.beta.threads.messages.list(currentThreadId);
+      const assistantMessage = threadMessages.data.find((msg) => msg.role === "assistant");
+
+      if (assistantMessage && assistantMessage.content[0].type === "text") {
+        const responseContent = assistantMessage.content[0].text.value;
+        const parsedResponse = JSON.parse(responseContent);
+        const newQuestionCard: QuestionCard = {
+          id: Date.now().toString(),
+          question: parsedResponse.question,
+          options: parsedResponse.options,
+          selectedOption: null,
+          answerStatus: null,
+        };
+        setQuestionCards((prev) => [...prev, newQuestionCard]);
+
+        const questionMessage: Message = {
+          id: newQuestionCard.id,
+          content: JSON.stringify(parsedResponse, null, 2),
+          isUser: false,
+          timestamp: new Date(),
+        };
+        setLocalMessages((prev) => prev.filter((msg) => msg.content !== "Loading new question...").concat(questionMessage));
+        onMessageAdd(questionMessage);
+      } else {
+        setError({ code: "NO_QUESTION_ERROR", message: "No question received from Assistant." });
+      }
+    } catch (error) {
+      console.error("Error fetching question:", error);
+      setError({ code: "FETCH_QUESTION_ERROR", message: "Error fetching new question. Please try again." });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleOptionClick = (cardId: string, optionId: string) => {
+    setQuestionCards((prev) =>
+      prev.map((card) =>
+        card.id === cardId && !card.selectedOption
+          ? {
+              ...card,
+              selectedOption: optionId,
+              answerStatus: card.options.find((opt) => opt.id === optionId)?.isCorrect
+                ? "Correct!"
+                : `Incorrect! The correct answer is: ${card.options.find((opt) => opt.isCorrect)?.text}`,
+            }
+          : card
+      )
+    );
+
+    const card = questionCards.find((c) => c.id === cardId);
+    if (card) {
+      const selected = card.options.find((opt) => opt.id === optionId);
+      if (selected?.isCorrect) {
+        setScore((prev) => prev + 1);
+      }
+      setTimeout(fetchNewQuestion, 2000);
+    }
   };
 
   const toggleAssistant = async () => {
@@ -179,94 +313,34 @@ export default function PdfChat({
       ? "asst_esfTILv1Q0BeKYWQIPLJf92p"
       : "asst_jWYrduIi2q9am5ho6TJxric0";
     setAssistantId(newAssistantId);
-    setIsLoading(true); // Show spinner in send button
+    setIsLoading(true);
     setError(null);
 
     try {
-      const currentThreadId = await createThreadIfNeeded(); // Reuse or create thread
-
+      const currentThreadId = await createThreadIfNeeded();
       const defaultMessageContent = newAssistantId === "asst_jWYrduIi2q9am5ho6TJxric0"
         ? "Welcome to General Chat! How can I assist you today?"
         : "Start asking questions about the uploaded documents.";
 
       if (newAssistantId === "asst_jWYrduIi2q9am5ho6TJxric0") {
-        // General Assistant: Add default message directly
         const defaultMessage: Message = {
           id: Date.now().toString(),
           content: defaultMessageContent,
           isUser: false,
           timestamp: new Date(),
         };
-
         setLocalMessages([defaultMessage]);
         onMessageAdd(defaultMessage);
-
-        // Add to OpenAI thread for consistency
         await openai.beta.threads.messages.create(currentThreadId, {
           role: "assistant",
           content: defaultMessageContent,
         });
-      } else {
-        // Q&A Assistant: Send user message with selected file content and run assistant
-        let messageContent = defaultMessageContent;
-        if (selectedFiles.length > 0) {
-          messageContent += "\n\nReference the following content:\n\n";
-          selectedFiles.forEach((file) => {
-            messageContent += `--- ${file.name} ---\n${file.content.substring(0, 5000)}\n\n`;
-          });
-        } else {
-          messageContent += "\n\nNo documents are currently selected.";
-        }
-
-        await openai.beta.threads.messages.create(currentThreadId, {
-          role: "user",
-          content: messageContent,
-        });
-
-        // Create a run to prompt the assistant to respond
-        const run = await openai.beta.threads.runs.create(currentThreadId, {
-          assistant_id: newAssistantId,
-        });
-
-        // Wait for the run to complete
-        let runStatus = await openai.beta.threads.runs.retrieve(currentThreadId, run.id);
-        while (runStatus.status !== "completed") {
-          await new Promise((resolve) => setTimeout(resolve, 1000));
-          runStatus = await openai.beta.threads.runs.retrieve(currentThreadId, run.id);
-        }
-
-        // Fetch the assistant's response
-        const threadMessages = await openai.beta.threads.messages.list(currentThreadId);
-        const assistantMessage = threadMessages.data.find((msg) => msg.role === "assistant");
-
-        if (assistantMessage && assistantMessage.content[0].type === "text") {
-          const aiResponse: Message = {
-            id: (Date.now() + 1).toString(),
-            content: assistantMessage.content[0].text.value,
-            isUser: false,
-            timestamp: new Date(),
-          };
-          typewriterEffect(aiResponse.id, aiResponse.content);
-          setLocalMessages([aiResponse]);
-          onMessageAdd(aiResponse);
-        } else {
-          // Fallback: Show the default user message
-          const fallbackMessage: Message = {
-            id: Date.now().toString(),
-            content: defaultMessageContent,
-            isUser: true,
-            timestamp: new Date(),
-          };
-          setLocalMessages([fallbackMessage]);
-          onMessageAdd(fallbackMessage);
-          setError("No response from Q&A Assistant. You can start asking questions.");
-        }
       }
     } catch (error) {
-      console.error("Error sending default message:", error);
-      setError("Failed to initialize new chat. Please try again.");
+      console.error("Error switching assistant:", error);
+      setError({ code: "SWITCH_ASSISTANT_ERROR", message: "Failed to switch assistant. Please try again." });
     } finally {
-      setIsLoading(false); // Hide spinner
+      setIsLoading(false);
     }
   };
 
@@ -301,9 +375,13 @@ export default function PdfChat({
           resolve(fullText);
         } catch (error) {
           reject("Failed to extract text from PDF");
+          setError({ code: "PDF_EXTRACT_ERROR", message: "Failed to extract text from PDF." });
         }
       };
-      fileReader.onerror = () => reject("Error reading file");
+      fileReader.onerror = () => {
+        reject("Error reading file");
+        setError({ code: "FILE_READ_ERROR", message: "Error reading file." });
+      };
       fileReader.readAsArrayBuffer(file);
     });
   };
@@ -314,12 +392,11 @@ export default function PdfChat({
       reader.onload = async () => {
         if (typeof reader.result === "string") {
           try {
-            // Perform OCR using Tesseract.js
             const { data: { text } } = await Tesseract.recognize(
               reader.result,
-              "eng", // Language: English
+              "eng",
               {
-                logger: (m) => console.log(m), // Optional: Log progress
+                logger: (m) => console.log(m),
               }
             );
             if (!text.trim()) {
@@ -328,12 +405,17 @@ export default function PdfChat({
             resolve({ text, dataUrl: reader.result });
           } catch (error) {
             reject("Failed to extract text from image");
+            setError({ code: "IMAGE_EXTRACT_ERROR", message: "Failed to extract text from image." });
           }
         } else {
           reject("Failed to process image");
+          setError({ code: "IMAGE_PROCESS_ERROR", message: "Failed to process image." });
         }
       };
-      reader.onerror = () => reject("Error reading file");
+      reader.onerror = () => {
+        reject("Error reading file");
+        setError({ code: "FILE_READ_ERROR", message: "Error reading file." });
+      };
       reader.readAsDataURL(file);
     });
   };
@@ -344,6 +426,14 @@ export default function PdfChat({
 
     setIsLoading(true);
     setError(null);
+
+    // Check if a file with the same name and chatId already exists
+    const existingFile = selectedFiles.find((f) => f.name === file.name && f.chatId === chatId);
+    if (existingFile) {
+      setError({ code: "DUPLICATE_FILE", message: `File "${file.name}" already exists in this chat.` });
+      setIsLoading(false);
+      return;
+    }
 
     try {
       let fileData: FileData;
@@ -370,8 +460,8 @@ export default function PdfChat({
           id: Date.now().toString(),
           name: file.name,
           type: "image",
-          content: text, // Store extracted text
-          url: dataUrl, // Store Data URL for display if needed
+          content: text,
+          url: dataUrl,
           selected: true,
           chatId: chatId,
         };
@@ -424,11 +514,16 @@ export default function PdfChat({
         setLocalMessages((prev) => [...prev, aiResponse]);
         onMessageAdd(aiResponse);
       } else {
-        setError("No response from Assistant.");
+        setError({ code: "NO_RESPONSE_ERROR", message: "No response from Assistant." });
       }
     } catch (error) {
-      setError(`Error processing ${file.type === "application/pdf" ? "PDF" : "image"}: ${error instanceof Error ? error.message : "Unknown error"}`);
       console.error("Error processing file:", error);
+      setError({
+        code: "FILE_PROCESS_ERROR",
+        message: `Error processing ${file.type === "application/pdf" ? "PDF" : "image"}: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`,
+      });
     } finally {
       setIsLoading(false);
     }
@@ -493,11 +588,11 @@ export default function PdfChat({
         setLocalMessages((prev) => [...prev, aiResponse]);
         onMessageAdd(aiResponse);
       } else {
-        setError("No response from Assistant.");
+        setError({ code: "NO_RESPONSE_ERROR", message: "No response from Assistant." });
       }
     } catch (error) {
-      setError("Error communicating with AI. Please try again.");
       console.error("Error sending message:", error);
+      setError({ code: "SEND_MESSAGE_ERROR", message: "Error communicating with AI. Please try again." });
     } finally {
       setIsLoading(false);
     }
@@ -520,33 +615,83 @@ export default function PdfChat({
     return dateObj.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   };
 
-  const renderMessageContent = (content: string) => {
-    const sanitizedContent = sanitizeHtml(content, {
-      allowedTags: ["div", "h1", "h2", "h3", "h4", "h5", "h6", "p", "ul", "ol", "li", "b", "i", "strong", "em", "br", "span"],
-      allowedAttributes: {
-        "*": ["class", "style"],
-      },
-    });
+  const renderMessageContent = (content: string, messageId: string) => {
+    try {
+      const parsed = JSON.parse(content);
+      if (parsed.question && parsed.options) {
+        const card = questionCards.find((c) => c.id === messageId);
+        if (!card) return null;
 
-    return parse(sanitizedContent, {
-      replace: (domNode) => {
-        if (domNode instanceof Element && domNode.name === "p") {
-          const nextSibling = domNode.next;
-          const isLastP = !nextSibling || (nextSibling instanceof Element && nextSibling.name !== "p");
-          return (
-            <>
-              {domToReact([domNode])}
-              {!isLastP && <div style={{ height: "12px" }} />}
-            </>
-          );
-        }
-        return undefined;
-      },
-    });
+        return (
+          <div className="bg-white p-4 rounded-lg shadow-md w-full max-w-md">
+            <h3 className="text-lg font-semibold mb-4">{parsed.question.text}</h3>
+            <div className="space-y-2">
+              {parsed.options.map((option: Option) => (
+                <div
+                  key={option.id}
+                  onClick={() => handleOptionClick(card.id, option.id)}
+                  className={`p-3 rounded-md cursor-pointer transition-colors duration-200 ${
+                    card.selectedOption === option.id
+                      ? option.isCorrect
+                        ? "bg-green-100 border-2 border-green-500"
+                        : "bg-red-100 border-2 border-red-500"
+                      : "bg-gray-50 hover:bg-gray-100 border"
+                  }`}
+                >
+                  <pre className="text-sm bg-gray-900 text-white p-2 rounded-md">
+                    <code>{option.text}</code>
+                  </pre>
+                </div>
+              ))}
+            </div>
+            {card.answerStatus && (
+              <p className={`mt-4 font-medium ${card.answerStatus.startsWith("Correct") ? "text-green-600" : "text-red-600"}`}>
+                {card.answerStatus}
+              </p>
+            )}
+          </div>
+        );
+      }
+    } catch (e) {
+      const sanitizedContent = sanitizeHtml(content, {
+        allowedTags: ["div", "h1", "h2", "h3", "h4", "h5", "h6", "p", "ul", "ol", "li", "b", "i", "strong", "em", "br", "span", "pre", "code"],
+        allowedAttributes: {
+          "*": ["class", "style"],
+        },
+      });
+
+      return parse(sanitizedContent, {
+        replace: (domNode) => {
+          if (domNode instanceof Element && domNode.name === "p") {
+            const nextSibling = domNode.next;
+            const isLastP = !nextSibling || (nextSibling instanceof Element && nextSibling.name !== "p");
+            return (
+              <>
+                {domToReact([domNode])}
+                {!isLastP && <div style={{ height: "12px" }} />}
+              </>
+            );
+          }
+          return undefined;
+        },
+      });
+    }
+    return content;
   };
 
   return (
     <>
+      <style>
+        {`
+          pre code {
+            font-family: 'Fira Code', 'Consolas', monospace;
+            font-size: 0.875rem;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-break: break-word;
+          }
+        `}
+      </style>
       <Script
         src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"
         onLoad={() => {
@@ -598,6 +743,7 @@ export default function PdfChat({
             )}
           </div>
           <div className="flex items-center gap-2">
+            <div className="text-sm font-medium">Score: {score}</div>
             <Button
               variant="outline"
               size="sm"
@@ -605,6 +751,14 @@ export default function PdfChat({
               disabled={isLoading}
             >
               {assistantId === "asst_jWYrduIi2q9am5ho6TJxric0" ? "Switch to Q&A Chat" : "Switch to General Chat"}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={fetchNewQuestion}
+              disabled={isLoading}
+            >
+              New Question
             </Button>
             <input
               id="fileUploadInput"
@@ -634,7 +788,7 @@ export default function PdfChat({
                   }`}
                 >
                   <div className={`mb-1`}>
-                    {message.isUser ? message.content : renderMessageContent(typewriterMessages.get(message.id) || message.content)}
+                    {message.isUser ? message.content : renderMessageContent(typewriterMessages.get(message.id) || message.content, message.id)}
                   </div>
                   <div className={`text-xs ${message.isUser ? "text-blue-200" : "text-gray-500"} text-right`}>
                     {formatTime(message.timestamp)}
@@ -645,7 +799,11 @@ export default function PdfChat({
           )}
           <div ref={messagesEndRef} />
         </div>
-        {error && <div className="p-3 mx-4 mb-2 bg-red-50 text-red-700 rounded-md text-sm">{error}</div>}
+        {error && (
+          <div className="p-3 mx-4 mb-2 bg-red-50 text-red-700 rounded-md text-sm">
+            <strong>Error {error.code}:</strong> {error.message}
+          </div>
+        )}
         <form onSubmit={handleSendMessage} className="p-4 border-t flex items-center gap-2">
           <Input
             value={inputMessage}

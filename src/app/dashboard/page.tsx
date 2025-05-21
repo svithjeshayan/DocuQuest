@@ -5,7 +5,7 @@ import PdfChat from "@/components/pdf-chat";
 import { Button } from "@/components/ui/button";
 import { PlusCircle, Trash2, X } from "lucide-react";
 import { useUser } from "@/context/UserContext";
-import { signOut } from "next-auth/react"; // Added import
+import { signOut } from "next-auth/react";
 import '@/components/css/global.css';
 
 type Chat = {
@@ -55,34 +55,54 @@ export default function Home() {
 
   useEffect(() => {
     if (!user) return;
-  
-    const fetchData = async () => {
-      setIsLoading(true);
-      try {
-        const chatsResponse = await fetch("/api/chats", {
-          headers: { "User-Id": user.id },
-        });
-        const chatsData = await chatsResponse.json();
-        setChats(chatsData);
-        setIsChatLoaded(true);
-  
-        if (chatsData.length > 0) {
-          setActiveChat(chatsData[0].id);
-        }
-  
-        const filesResponse = await fetch("/api/files", {
-          headers: { "User-Id": user.id },
-        });
-        const filesData = await filesResponse.json();
-        console.log("Fetched files:", filesData);
-        setUploadedFiles(filesData);
-      } catch (error) {
-        console.error("Error fetching data:", error);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-  
+
+  const fetchData = async () => {
+  setIsLoading(true);
+  try {
+    const chatsResponse = await fetch("/api/chats", {
+      headers: { "User-Id": user.id },
+    });
+    const chatsData = await chatsResponse.json();
+    setChats(chatsData);
+    setIsChatLoaded(true);
+
+    const filesResponse = await fetch("/api/files", {
+      headers: { "User-Id": user.id },
+    });
+    const filesData = await filesResponse.json();
+    console.log("Fetched files:", filesData);
+    // Deduplicate files by id to prevent duplicates
+    const uniqueFiles = Array.from(
+      new Map(filesData.map((file: FileData) => [file.id, file])).values()
+    ) as FileData[];
+    setUploadedFiles(uniqueFiles);
+
+    // Set active chat after files are fetched to ensure Sources panel updates
+    if (chatsData.length > 0 && !activeChat) {
+      const firstChatId = chatsData[0].id;
+      setActiveChat(firstChatId);
+      // Ensure files are associated with the active chat
+      setUploadedFiles((prev) =>
+        prev.map((file) => ({
+          ...file,
+          chatId: file.chatId || firstChatId, // Assign chatId if missing
+        }))
+      );
+    }
+  } catch (error) {
+    console.error("Error fetching data:", error);
+  } finally {
+    setIsLoading(false);
+  }
+};
+
+const getSelectedFiles = () => {
+  const selectedFiles = uploadedFiles.filter(
+    (file) => file.chatId === activeChat && file.selected
+  );
+  console.log("Selected files for activeChat", activeChat, selectedFiles);
+  return selectedFiles;
+};
     fetchData();
   }, [user]);
 
@@ -224,7 +244,14 @@ export default function Home() {
     url?: string;
   }) => {
     if (!user || !activeChat) return;
-  
+
+    // Check if a file with the same name and chatId already exists
+    const existingFile = uploadedFiles.find((f) => f.name === file.name && f.chatId === activeChat);
+    if (existingFile) {
+      console.log(`File "${file.name}" already exists for chat ${activeChat}. Skipping upload.`);
+      return;
+    }
+
     try {
       const response = await fetch("/api/files", {
         method: "POST",
@@ -270,6 +297,23 @@ export default function Home() {
     }
   };
 
+  const fetchFiles = async (chatId: string): Promise<FileData[]> => {
+    try {
+      const response = await fetch(`/api/files?chatId=${chatId}`, {
+        headers: { "User-Id": user?.id || "" },
+      });
+      if (!response.ok) {
+        throw new Error("Failed to fetch files");
+      }
+      const filesData = await response.json();
+      console.log(`Fetched files for chat ${chatId}:`, filesData);
+      return filesData;
+    } catch (error) {
+      console.error(`Error fetching files for chat ${chatId}:`, error);
+      return [];
+    }
+  };
+
   const getSelectedFiles = () => {
     const selectedFiles = uploadedFiles.filter((file) => file.selected && file.chatId === activeChat);
     console.log("Selected files for activeChat", activeChat, selectedFiles);
@@ -289,12 +333,12 @@ export default function Home() {
     <div className="flex h-screen bg-gray-100">
       <div className="w-1/5 bg-white border-r border-gray-200 flex flex-col">
         <div className="p-4 border-b border-gray-200">
-          <h1 className="text-xl font-semibold text-gray-800">DocQuest</h1>
+          <h1 className="text-xl font-semibold text-gray-800">DocuQuest</h1>
         </div>
         <div className="p-4">
           <Button
             onClick={createNewChat}
-            className="w-full flex items-center justify-center gap-2 bg-black hover:bg-gray-900 text-white"
+            className="w-full flex items-center justify-center gap-2 bg-black hover:bg-gray-900 text-white transition-colors duration-200"
           >
             <PlusCircle size={16} />
             New Chat
@@ -358,7 +402,7 @@ export default function Home() {
           </div>
         )}
       </div>
-      <div className="w-3/5 border-r border-gray-200">
+      <div className="w-3/5 border-r border-gray-200" style={{ background: "#ededed" }}>
         {activeChat ? (
           <PdfChat
             key={activeChat}
@@ -369,7 +413,6 @@ export default function Home() {
             onRename={(newName) => renameChat(activeChat, newName)}
             onFileUpload={addUploadedFile}
             onMessageAdd={(message) => addMessageToChat(activeChat, message)}
-            selectedFiles={getSelectedFiles()}
             onThreadIdUpdate={(chatId: string, threadId: string | null) => {
               setChats((prev) =>
                 prev.map((chat) =>
@@ -377,6 +420,8 @@ export default function Home() {
                 )
               );
             }}
+            selectedFiles={getSelectedFiles()}
+            onFetchFiles={fetchFiles}
           />
         ) : (
           <div className="h-full flex items-center justify-center text-gray-500">
@@ -448,7 +493,7 @@ export default function Home() {
                   className="text-gray-500 hover:text-gray-700"
                 >
                   <X size={16} />
-                </button>
+              </button>
               </div>
               <p className="mb-6">Are you sure you want to delete this file? This action cannot be undone.</p>
               <div className="flex justify-end gap-2">
@@ -465,11 +510,11 @@ export default function Home() {
                 >
                   Delete
                 </Button>
+              </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
-    </div>
     </div>
   );
 }

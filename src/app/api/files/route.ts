@@ -1,3 +1,4 @@
+//src\app\api\files\route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { PrismaClient } from "@prisma/client";
 
@@ -21,7 +22,6 @@ export async function GET(request: NextRequest) {
         content: true,
         url: true,
         selected: true,
-        chatId: true, // Include chatId
       },
     });
 
@@ -49,15 +49,6 @@ export async function POST(request: NextRequest) {
         url,
         selected,
       },
-      select: {
-        id: true,
-        name: true,
-        type: true,
-        content: true,
-        url: true,
-        selected: true,
-        chatId: true, // Include chatId in response
-      },
     });
 
     return NextResponse.json(file);
@@ -66,4 +57,3 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Failed to create file" }, { status: 500 });
   }
 }
-
