@@ -17,6 +17,7 @@ export async function GET(request: NextRequest) {
       },
       select: {
         id: true,
+        chatId: true,
         name: true,
         type: true,
         content: true,

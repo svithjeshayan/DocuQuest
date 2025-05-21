@@ -210,6 +210,9 @@ export default function PdfChat({
   };
 
   const fetchNewQuestion = async () => {
+
+   
+
     setIsLoading(true);
     setError(null);
 
@@ -304,7 +307,11 @@ export default function PdfChat({
       if (selected?.isCorrect) {
         setScore((prev) => prev + 1);
       }
-      setTimeout(fetchNewQuestion, 2000);
+      if(chatType == "qa") {
+        setTimeout(fetchNewQuestion, 2000);
+      }
+     
+
     }
   };
 
@@ -619,6 +626,28 @@ export default function PdfChat({
   try {
     const parsed = JSON.parse(content);
     if (parsed.question && parsed.options) {
+      const card = questionCards.find((c) => c.id === messageId);
+
+      if (!card) {
+        return (
+          <div className="bg-white p-4 rounded-lg shadow-md w-full max-w-md">
+            <h3 className="text-lg font-semibold mb-4">{parsed.question.text}</h3>
+            <div className="space-y-2">
+              {parsed.options.map((option: { id: string; text: string; isCorrect: boolean }) => (
+                <div
+                  key={option.id}
+                  className="p-3 rounded-md cursor-pointer transition-colors duration-200 bg-gray-50 hover:bg-gray-100 border border-gray-200"
+                >
+                  <pre className="text-sm bg-blue-50 text-black p-2 rounded-md">
+                    <code>{option.text}</code>
+                  </pre>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      }
+
       return (
         <div className="bg-white p-4 rounded-lg shadow-md w-full max-w-md">
           <h3 className="text-lg font-semibold mb-4">{parsed.question.text}</h3>
@@ -626,7 +655,14 @@ export default function PdfChat({
             {parsed.options.map((option: { id: string; text: string; isCorrect: boolean }) => (
               <div
                 key={option.id}
-                className="p-3 rounded-md cursor-pointer transition-colors duration-200 bg-gray-50 hover:bg-gray-100 border border-gray-200"
+                onClick={() => handleOptionClick(card.id, option.id)}
+                className={`p-3 rounded-md cursor-pointer transition-colors duration-200 ${
+                  card.selectedOption === option.id
+                    ? option.isCorrect
+                      ? "bg-green-100 border-2 border-green-500"
+                      : "bg-red-100 border-2 border-red-500"
+                    : "bg-gray-50 hover:bg-gray-100 border"
+                }`}
               >
                 <pre className="text-sm bg-gray-900 text-white p-2 rounded-md">
                   <code>{option.text}</code>
@@ -634,13 +670,39 @@ export default function PdfChat({
               </div>
             ))}
           </div>
+          {card.answerStatus && (
+            <p className={`mt-4 font-medium ${card.answerStatus.startsWith("Correct") ? "text-green-600" : "text-red-600"}`}>
+              {card.answerStatus}
+            </p>
+          )}
         </div>
       );
     }
-    return <div className="text-gray-800">{content}</div>;
   } catch (e) {
-    return <div className="text-gray-800">{content}</div>;
+    const sanitizedContent = sanitizeHtml(content, {
+      allowedTags: ["div", "h1", "h2", "h3", "h4", "h5", "h6", "p", "ul", "ol", "li", "b", "i", "strong", "em", "br", "span", "pre", "code"],
+      allowedAttributes: {
+        "*": ["class", "style"],
+      },
+    });
+
+    return parse(sanitizedContent, {
+      replace: (domNode) => {
+        if (domNode instanceof Element && domNode.name === "p") {
+          const nextSibling = domNode.next;
+          const isLastP = !nextSibling || (nextSibling instanceof Element && nextSibling.name !== "p");
+          return (
+            <>
+              {domToReact([domNode])}
+              {!isLastP && <div style={{ height: "12px" }} />}
+            </>
+          );
+        }
+        return undefined;
+      },
+    });
   }
+  return content;
 };
 
   return (
@@ -706,11 +768,10 @@ export default function PdfChat({
               </>
             )}
           </div>
-          <div className="flex items-center gap-2">
-             { chatType === "qa" && (
-                <div className="text-sm font-medium">Score: {score}</div>
-             )}
-            
+          <div className="flex items-center gap-2">{chatType === "qa" && (
+            <div className="text-sm font-medium">Score: {score}</div>
+          )}
+          
             <Button
               variant="outline"
               size="sm"
@@ -719,8 +780,10 @@ export default function PdfChat({
             >
               {assistantId === "asst_jWYrduIi2q9am5ho6TJxric0" ? "Switch to Q&A Chat" : "Switch to General Chat"}
             </Button>
-            { chatType === "qa" && (
-                <Button
+
+{chatType === "qa" && (
+
+            <Button
               variant="outline"
               size="sm"
               onClick={fetchNewQuestion}
@@ -728,8 +791,7 @@ export default function PdfChat({
             >
               New Question
             </Button>
-            )}
-            
+)}
 
             <input
               id="fileUploadInput"
@@ -770,11 +832,7 @@ export default function PdfChat({
           )}
           <div ref={messagesEndRef} />
         </div>
-        {error && (
-          <div className="p-3 mx-4 mb-2 bg-red-50 text-red-700 rounded-md text-sm">
-            <strong>Error {error.code}:</strong> {error.message}
-          </div>
-        )}
+       
         <form onSubmit={handleSendMessage} className="p-4 border-t flex items-center gap-2">
           <Input
             value={inputMessage}

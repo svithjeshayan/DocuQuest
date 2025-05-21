@@ -140,7 +140,7 @@ export default function LoginPage() {
           <p className="text-sm text-muted-foreground">
             Don’t have an account?{" "}
             <span
-              onClick={() => router.push("/src/app/sign up/page.tsx")}
+              onClick={() => router.push("/register")}
               className="text-blue-600 hover:underline cursor-pointer"
             >
               Sign up

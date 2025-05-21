@@ -1,0 +1,47 @@
+import { NextResponse } from "next/server";
+
+export async function POST(request: Request) {
+  try {
+    const { passcode, time, email, toEmail } = await request.json();
+
+    // Validate required fields
+    if (!passcode || !time || !email || !toEmail) {
+      return NextResponse.json(
+        { error: "All fields are required" },
+        { status: 400 }
+      );
+    }
+
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email) || !emailRegex.test(toEmail)) {
+      return NextResponse.json(
+        { error: "Invalid email format" },
+        { status: 400 }
+      );
+    }
+
+    // Validate passcode and time
+    if (passcode.length < 1 || time.length < 1) {
+      return NextResponse.json(
+        { error: "Passcode and time must not be empty" },
+        { status: 400 }
+      );
+    }
+
+    // In a real app, you could save the message to a database or perform additional checks
+    return NextResponse.json(
+      {
+        success: true,
+        message: "Message validated successfully",
+      },
+      { status: 200 }
+    );
+  } catch (error: any) {
+    console.error("Send message error:", error);
+    return NextResponse.json(
+      { error: error.message || "An unexpected error occurred" },
+      { status: 500 }
+    );
+  }
+}

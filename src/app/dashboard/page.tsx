@@ -56,55 +56,43 @@ export default function Home() {
   useEffect(() => {
     if (!user) return;
 
-  const fetchData = async () => {
-  setIsLoading(true);
-  try {
-    const chatsResponse = await fetch("/api/chats", {
-      headers: { "User-Id": user.id },
-    });
-    const chatsData = await chatsResponse.json();
-    setChats(chatsData);
-    setIsChatLoaded(true);
+    const fetchData = async () => {
+      setIsLoading(true);
+      try {
+        // Fetch chats
+        const chatsResponse = await fetch("/api/chats", {
+          headers: { "User-Id": user.id },
+        });
+        if (!chatsResponse.ok) throw new Error("Failed to fetch chats");
+        const chatsData = await chatsResponse.json();
+        console.log("Fetched chats:", chatsData);
+        setChats(chatsData);
+        setIsChatLoaded(true);
 
-    const filesResponse = await fetch("/api/files", {
-      headers: { "User-Id": user.id },
-    });
-    const filesData = await filesResponse.json();
-    console.log("Fetched files:", filesData);
-    // Deduplicate files by id to prevent duplicates
-    const uniqueFiles = Array.from(
-      new Map(filesData.map((file: FileData) => [file.id, file])).values()
-    ) as FileData[];
-    setUploadedFiles(uniqueFiles);
+        // Fetch files
+        const filesResponse = await fetch("/api/files", {
+          headers: { "User-Id": user.id },
+        });
+        if (!filesResponse.ok) throw new Error("Failed to fetch files");
+        const filesData = await filesResponse.json();
+        console.log("Fetched files:", filesData);
+        setUploadedFiles(filesData); // Set all fetched files
+      } catch (error) {
+        console.error("Error fetching data:", error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
 
-    // Set active chat after files are fetched to ensure Sources panel updates
-    if (chatsData.length > 0 && !activeChat) {
-      const firstChatId = chatsData[0].id;
-      setActiveChat(firstChatId);
-      // Ensure files are associated with the active chat
-      setUploadedFiles((prev) =>
-        prev.map((file) => ({
-          ...file,
-          chatId: file.chatId || firstChatId, // Assign chatId if missing
-        }))
-      );
-    }
-  } catch (error) {
-    console.error("Error fetching data:", error);
-  } finally {
-    setIsLoading(false);
-  }
-};
-
-const getSelectedFiles = () => {
-  const selectedFiles = uploadedFiles.filter(
-    (file) => file.chatId === activeChat && file.selected
-  );
-  console.log("Selected files for activeChat", activeChat, selectedFiles);
-  return selectedFiles;
-};
     fetchData();
   }, [user]);
+
+  // Set activeChat after chats are loaded
+  useEffect(() => {
+    if (chats.length > 0 && !activeChat && isChatLoaded) {
+      setActiveChat(chats[0].id);
+    }
+  }, [chats, isChatLoaded, activeChat]);
 
   useEffect(() => {
     if (chats.length === 0 && isChatLoaded) {
@@ -136,7 +124,7 @@ const getSelectedFiles = () => {
           threadId: null,
         }),
       });
-
+      if (!response.ok) throw new Error("Failed to create chat");
       const savedChat = await response.json();
       setChats((prev) => [...prev, savedChat]);
       setActiveChat(savedChat.id);
@@ -245,13 +233,6 @@ const getSelectedFiles = () => {
   }) => {
     if (!user || !activeChat) return;
 
-    // Check if a file with the same name and chatId already exists
-    const existingFile = uploadedFiles.find((f) => f.name === file.name && f.chatId === activeChat);
-    if (existingFile) {
-      console.log(`File "${file.name}" already exists for chat ${activeChat}. Skipping upload.`);
-      return;
-    }
-
     try {
       const response = await fetch("/api/files", {
         method: "POST",
@@ -261,13 +242,14 @@ const getSelectedFiles = () => {
         },
         body: JSON.stringify({
           chatId: activeChat,
-          name: file.name.substring(0, 20) + "...",
+          name: file.name.length > 20 ? file.name.substring(0, 20) + "..." : file.name,
           type: file.type,
           content: file.content,
           url: file.url,
           selected: true,
         }),
       });
+      if (!response.ok) throw new Error(`Failed to save file: ${response.statusText}`);
       const savedFile = await response.json();
       setUploadedFiles((prev) => [...prev, savedFile]);
     } catch (error) {
@@ -277,6 +259,8 @@ const getSelectedFiles = () => {
 
   const toggleFileSelection = async (id: string) => {
     try {
+      const file = uploadedFiles.find((file) => file.id === id);
+      if (!file) return;
       await fetch(`/api/files/${id}`, {
         method: "PUT",
         headers: {
@@ -284,7 +268,7 @@ const getSelectedFiles = () => {
           "User-Id": user?.id || "",
         },
         body: JSON.stringify({
-          selected: !uploadedFiles.find((file) => file.id === id)?.selected,
+          selected: !file.selected,
         }),
       });
       setUploadedFiles((prev) =>
@@ -302,11 +286,18 @@ const getSelectedFiles = () => {
       const response = await fetch(`/api/files?chatId=${chatId}`, {
         headers: { "User-Id": user?.id || "" },
       });
-      if (!response.ok) {
-        throw new Error("Failed to fetch files");
-      }
+      if (!response.ok) throw new Error("Failed to fetch files");
       const filesData = await response.json();
       console.log(`Fetched files for chat ${chatId}:`, filesData);
+      setUploadedFiles((prev) => {
+        // Keep files for other chats, replace files for this chatId
+        const updatedFiles = [
+          ...prev.filter((file) => file.chatId !== chatId),
+          ...filesData,
+        ];
+        console.log("Updated uploadedFiles:", updatedFiles);
+        return updatedFiles;
+      });
       return filesData;
     } catch (error) {
       console.error(`Error fetching files for chat ${chatId}:`, error);
@@ -356,7 +347,7 @@ const getSelectedFiles = () => {
               <div className="truncate">{chat.name}</div>
               <button
                 onClick={(e) => deleteChat(chat.id, e)}
-                className="text-gray-500 hover:text-red-500"
+                className="text-gray-500 hover:text-red-500 "
               >
                 <X size={16} />
               </button>

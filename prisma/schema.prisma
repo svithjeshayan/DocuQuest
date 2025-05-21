@@ -9,17 +9,19 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// User model
 model User {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  password  String   // Hash this in your app
-  firstName String
-  lastName  String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  accounts       Account[]        // NextAuth relation
-  sessions       Session[]        // NextAuth relation      
+  id           String   @id @default(uuid())
+  email        String   @unique
+  password     String   // Hash this in your app
+  firstName    String
+  lastName     String
+  verifiedEmail Boolean  @default(false)
+  otpCode      String?
+  otpExpiry    DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  accounts     Account[]     // NextAuth relation
+  sessions     Session[]     // NextAuth relation      
   chatHistories ChatHistory[]               
 }
 
